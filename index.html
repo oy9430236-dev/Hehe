@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <body>
 <main>
 <h1>⚡ 웹툰 초고속 번역기</h1>
-<p class="sub">말풍선 크기에 고정하여 글자가 밖으로 이탈하지 않도록 정렬합니다.</p>
+<p class="sub">글자가 겹치지 않도록 깔끔한 마스킹과 폰트 레이아웃을 제공합니다.</p>
 <div class="card cfg">
   <span class="t">Gemini API 키 (자동 저장)</span>
   <input type="password" id="key" style="width:100%" placeholder="Gemini API 키 입력 (AIza…)" autocomplete="off">
@@ -110,7 +110,6 @@ function layout(){
 
 const setSt=(p,t)=>{ p.st=t; if(p.bdEl){ p.bdEl.textContent=t; p.bdEl.hidden=!t; } };
 
-// [핵심 해결 1] 한글 글자 단위(Character-level) 강제 줄바꿈 함수
 function wrapTextCJK(ctx, text, maxWidth) {
   const lines = [];
   const paragraphs = text.split('\n');
@@ -151,19 +150,31 @@ function renderText(ctx, scCtx, item, W, H) {
   const isLight = (r * 0.299 + g * 0.587 + b * 0.114) > 130;
   const textColor = isLight ? '#000000' : '#ffffff';
 
-  // 2. [핵심 해결 2] 말풍선 가로 폭에 100% 핏(Fit)되도록 폰트 및 줄바꿈 자동 연산
-  const maxAllowWidth = bw * 0.88; // 말풍선 내부 여백 12% 확보
-  let fontSize = Math.max(10, Math.min(Math.floor(bw * 0.28), 28));
-  ctx.font = `800 ${fontSize}px ${FONT}`;
+  // 2. 글자 뒤 원문 깔끔하게 마스킹 (모서리가 부드러운 둥근 사각형)
+  ctx.save();
+  ctx.fillStyle = bgColor;
+  ctx.beginPath();
+  const radius = Math.min(8, bw / 4, bh / 4);
+  if (ctx.roundRect) {
+    ctx.roundRect(x1, y1, bw, bh, radius);
+  } else {
+    ctx.rect(x1, y1, bw, bh);
+  }
+  ctx.fill();
+  ctx.restore();
+
+  // 3. 폰트 크기 및 정돈된 줄바꿈
+  const maxAllowWidth = bw * 0.9;
+  let fontSize = Math.max(10, Math.min(Math.floor(bw * 0.25), 26));
+  ctx.font = `700 ${fontSize}px ${FONT}`;
 
   let lines = wrapTextCJK(ctx, item.ko, maxAllowWidth);
-  let lineHeight = fontSize * 1.2;
+  let lineHeight = fontSize * 1.3;
 
-  // 세로 공간 초과 시 폰트 축소 루프
-  while (lines.length * lineHeight > bh * 0.9 && fontSize > 8) {
+  while (lines.length * lineHeight > bh * 0.95 && fontSize > 8) {
     fontSize -= 1;
-    lineHeight = fontSize * 1.2;
-    ctx.font = `800 ${fontSize}px ${FONT}`;
+    lineHeight = fontSize * 1.3;
+    ctx.font = `700 ${fontSize}px ${FONT}`;
     lines = wrapTextCJK(ctx, item.ko, maxAllowWidth);
   }
 
@@ -175,10 +186,9 @@ function renderText(ctx, scCtx, item, W, H) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // 3. [핵심 해결 3] 원문 잔상 차단을 위해 외곽선(Stroke)을 폰트 크기보다 넓게 설정하여 완벽 마스킹
-  ctx.strokeStyle = bgColor;
-  ctx.lineWidth = Math.max(12, fontSize * 0.95);
-  ctx.lineJoin = 'round';
+  // 얇고 깔끔한 가독성 테두리만 그리기 (글자 안 뭉침)
+  ctx.strokeStyle = isLight ? '#ffffff' : '#000000';
+  ctx.lineWidth = Math.max(1.5, fontSize * 0.08);
 
   lines.forEach(line => {
     ctx.strokeText(line, centerX, currentY);
@@ -242,7 +252,8 @@ async function fastTranslate(p, sig) {
     }, 'image/jpeg', 0.75);
   });
 
-  const promptText = `Detect ALL speech bubbles text and translate to natural Korean (${lang}). Box format: [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
+  // AI에 말풍선 하나 단위로 묶어서 검출하라고 강조 프롬프트 수정
+  const promptText = `Group text inside the same speech bubble together as ONE item. Translate to natural Korean (${lang}). Box format: [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
   
   const payload = {
     contents: [{
