@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <body>
 <main>
 <h1>⚡ 웹툰 초고속 번역기</h1>
-<p class="sub">글자가 겹치지 않도록 깔끔한 마스킹과 폰트 레이아웃을 제공합니다.</p>
+<p class="sub">네모 박스 없이 원문 위치에 자연스럽게 번역 텍스트만 배치합니다.</p>
 <div class="card cfg">
   <span class="t">Gemini API 키 (자동 저장)</span>
   <input type="password" id="key" style="width:100%" placeholder="Gemini API 키 입력 (AIza…)" autocomplete="off">
@@ -150,31 +150,18 @@ function renderText(ctx, scCtx, item, W, H) {
   const isLight = (r * 0.299 + g * 0.587 + b * 0.114) > 130;
   const textColor = isLight ? '#000000' : '#ffffff';
 
-  // 2. 글자 뒤 원문 깔끔하게 마스킹 (모서리가 부드러운 둥근 사각형)
-  ctx.save();
-  ctx.fillStyle = bgColor;
-  ctx.beginPath();
-  const radius = Math.min(8, bw / 4, bh / 4);
-  if (ctx.roundRect) {
-    ctx.roundRect(x1, y1, bw, bh, radius);
-  } else {
-    ctx.rect(x1, y1, bw, bh);
-  }
-  ctx.fill();
-  ctx.restore();
-
-  // 3. 폰트 크기 및 정돈된 줄바꿈
-  const maxAllowWidth = bw * 0.9;
-  let fontSize = Math.max(10, Math.min(Math.floor(bw * 0.25), 26));
-  ctx.font = `700 ${fontSize}px ${FONT}`;
+  // 2. 폰트 크기 및 줄바꿈 계산
+  const maxAllowWidth = bw * 0.88;
+  let fontSize = Math.max(10, Math.min(Math.floor(bw * 0.26), 26));
+  ctx.font = `800 ${fontSize}px ${FONT}`;
 
   let lines = wrapTextCJK(ctx, item.ko, maxAllowWidth);
-  let lineHeight = fontSize * 1.3;
+  let lineHeight = fontSize * 1.35;
 
-  while (lines.length * lineHeight > bh * 0.95 && fontSize > 8) {
+  while (lines.length * lineHeight > bh * 0.95 && fontSize > 9) {
     fontSize -= 1;
-    lineHeight = fontSize * 1.3;
-    ctx.font = `700 ${fontSize}px ${FONT}`;
+    lineHeight = fontSize * 1.35;
+    ctx.font = `800 ${fontSize}px ${FONT}`;
     lines = wrapTextCJK(ctx, item.ko, maxAllowWidth);
   }
 
@@ -186,9 +173,11 @@ function renderText(ctx, scCtx, item, W, H) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // 얇고 깔끔한 가독성 테두리만 그리기 (글자 안 뭉침)
-  ctx.strokeStyle = isLight ? '#ffffff' : '#000000';
-  ctx.lineWidth = Math.max(1.5, fontSize * 0.08);
+  // [핵심] 네모 박스/면 그리기 완전히 제거!
+  // 배경색 테두리(stroke)만 넉넉한 굵기로 그려서 원문 일본어 글자만 감쪽같이 지움
+  ctx.strokeStyle = bgColor;
+  ctx.lineWidth = Math.max(8, fontSize * 0.55);
+  ctx.lineJoin = 'round';
 
   lines.forEach(line => {
     ctx.strokeText(line, centerX, currentY);
@@ -252,8 +241,7 @@ async function fastTranslate(p, sig) {
     }, 'image/jpeg', 0.75);
   });
 
-  // AI에 말풍선 하나 단위로 묶어서 검출하라고 강조 프롬프트 수정
-  const promptText = `Group text inside the same speech bubble together as ONE item. Translate to natural Korean (${lang}). Box format: [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
+  const promptText = `Detect speech bubbles, translate to natural Korean (${lang}). Box format: [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
   
   const payload = {
     contents: [{
