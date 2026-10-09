@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>웹툰 초고속 번역기</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1c1c1e;--mut:#6b6b70;--card:#fff;--bd:#e3e3dc;--ac:#e8453c;--acfg:#fff;--chip:#f0efe9;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17171a;--fg:#f2f2f0;--mut:#9a9aa0;--card:#222226;--bd:#35353b;--chip:#2c2c32}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 "Pretendard","Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+main{max-width:680px;margin:0 auto;padding:20px 12px 40px}
+h1{font-size:22px;margin:0 0 4px}
+p.sub{margin:0 0 14px;color:var(--mut);font-size:14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:14px}
+.t{font-size:13px;color:var(--mut);display:block;margin-bottom:6px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.chip{border:1px solid var(--bd);background:var(--chip);color:var(--fg);border-radius:999px;padding:6px 12px;font:inherit;font-size:14px;cursor:pointer}
+.chip.on{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center}
+button.b{border:0;border-radius:10px;padding:11px 16px;font:inherit;font-weight:600;cursor:pointer;background:var(--ac);color:var(--acfg)}
+button.b.s{background:var(--chip);color:var(--fg);font-weight:500}
+button:disabled{opacity:.5}
+#err{color:var(--ac);font-size:14px;margin-top:8px;font-weight:600}
+.hide{display:none}
+#stack{max-width:680px;margin:0 auto;background:#000;line-height:0}
+.pg{position:relative}
+.pg canvas{width:100%;height:auto;display:block}
+.bd{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.72);color:#fff;font-size:13px;line-height:1.3;padding:5px 10px;border-radius:999px}
+.cfg input{border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--fg);padding:9px 10px;font:inherit;font-size:14px}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+<main>
+<h1>⚡ 웹툰 초고속 번역기</h1>
+<p class="sub">원문을 말풍선 색상으로 깨끗하게 지우고 한국어를 지능적으로 정렬합니다.</p>
+<div class="card cfg">
+  <span class="t">Gemini API 키 (자동 저장)</span>
+  <input type="password" id="key" style="width:100%" placeholder="Gemini API 키 입력 (AIza…)" autocomplete="off">
+</div>
+<div class="card">
+  <span class="t">원문 언어 선택</span>
+  <div class="chips" id="langs">
+    <button class="chip on" data-v="auto">자동 감지</button>
+    <button class="chip" data-v="일본어">일본어</button>
+    <button class="chip" data-v="중국어">중국어</button>
+    <button class="chip" data-v="영어">영어</button>
+  </div>
+  <div class="row">
+    <input type="file" id="file" accept="image/*,.cbz,.zip" multiple class="hide">
+    <button class="b s" id="pick">🖼️ 이미지 추가</button>
+    <button class="b" id="go" disabled>⚡ 번역하기</button>
+  </div>
+  <div id="err"></div>
+</div>
+</main>
+<div id="stack"></div>
+
+<script>
+const FONT='"Pretendard","Apple SD Gothic Neo","Noto Sans KR",sans-serif';
+
+const $=id=>document.getElementById(id);
+let pages=[], lang='auto', ctrl=null;
+
+const keyInput = $('key');
+keyInput.value = localStorage.getItem('wt_auto_key') || '';
+keyInput.oninput = () => localStorage.setItem('wt_auto_key', keyInput.value.trim());
+
+document.querySelectorAll('#langs .chip').forEach(c=>c.onclick=()=>{
+  document.querySelectorAll('#langs .chip').forEach(x=>x.classList.remove('on'));
+  c.classList.add('on');
+  lang = c.dataset.v;
+});
+
+$('pick').onclick=()=>$('file').click();
+const IMG=/\.(jpe?g|png|webp|gif|avif|bmp)$/i;
+
+async function addBmp(bmp){
+  pages.push({bmp, items:null, st:'', cv:document.createElement('canvas')});
+  render(pages[pages.length-1]);
+  layout();
+}
+
+async function addFiles(list){
+  $('err').textContent='';
+  for(const f of list){
+    try{
+      if(/\.(cbz|zip)$/i.test(f.name)){
+        const z=await JSZip.loadAsync(f), names=Object.keys(z.files).filter(n=>!z.files[n].dir&&IMG.test(n)&&!/__MACOSX/.test(n)).sort((x,y)=>x.localeCompare(y,undefined,{numeric:true}));
+        for(const n of names) await addBmp(await createImageBitmap(await z.files[n].async('blob')));
+      } else if(f.type.startsWith('image/')||IMG.test(f.name)) {
+        await addBmp(await createImageBitmap(f));
+      }
+    }catch(x){ $('err').textContent='파일을 열 수 없습니다.'; }
+  }
+}
+$('file').onchange=async e=>{ await addFiles([...e.target.files]); e.target.value=''; };
+
+function layout(){
+  const st=$('stack'), fr=document.createDocumentFragment();
+  pages.forEach(p=>{
+    const w=document.createElement('div'); w.className='pg'; w.append(p.cv);
+    const b=document.createElement('div'); b.className='bd'; b.textContent=p.st; b.hidden=!p.st; p.bdEl=b; w.append(b);
+    fr.append(w);
+  });
+  st.replaceChildren(fr);
+  $('go').disabled = pages.length === 0 || !!ctrl;
+}
+
+const setSt=(p,t)=>{ p.st=t; if(p.bdEl){ p.bdEl.textContent=t; p.bdEl.hidden=!t; } };
+
+function getWrappedLines(ctx, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let currentLine = '';
+
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const testLine = currentLine ? currentLine + ' ' + word : word;
+    if (ctx.measureText(testLine).width > maxWidth && currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = testLine;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines.length ? lines : [text];
+}
+
+function renderText(ctx, scCtx, item, W, H) {
+  // 1. 원문 글자를 완전히 덮기 위한 안전 패딩(Margin) 계산
+  const padX = Math.floor(item.w * 0.12);
+  const padY = Math.floor(item.h * 0.12);
+  const x1 = Math.max(0, Math.floor(item.x1 - padX));
+  const y1 = Math.max(0, Math.floor(item.y1 - padY));
+  const bw = Math.min(W - x1, Math.ceil(item.w + padX * 2));
+  const bh = Math.min(H - y1, Math.ceil(item.h + padY * 2));
+
+  if (bw < 6 || bh < 6) return;
+
+  // 2. 말풍선 안쪽의 원본 배경색 추출
+  const data = scCtx.getImageData(x1, y1, bw, bh).data;
+  let r=0, g=0, b=0, c=0;
+  for(let i=0; i<data.length; i+=32){
+    r += data[i]; g += data[i+1]; b += data[i+2]; c++;
+  }
+  r = Math.round(r/c); g = Math.round(g/c); b = Math.round(b/c);
+
+  const bgColor = `rgb(${r},${g},${b})`;
+  const isLight = (r * 0.299 + g * 0.587 + b * 0.114) > 130;
+  const textColor = isLight ? '#000000' : '#ffffff';
+
+  // 3. [핵심] 추출한 원본 배경색으로 텍스트 영역을 물리적으로 깨끗이 채워 지움
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(x1, y1, bw, bh);
+
+  // 4. 새 한국어 텍스트 크기 및 줄바꿈 지능적 조절
+  let fontSize = Math.max(12, Math.min(Math.floor(bw * 0.26), 32));
+  ctx.font = `800 ${fontSize}px ${FONT}`;
+
+  let lines = [];
+  const rawParagraphs = item.ko.split('\n');
+  rawParagraphs.forEach(para => {
+    lines.push(...getWrappedLines(ctx, para, bw * 0.92));
+  });
+
+  let lineHeight = fontSize * 1.25;
+  while (lines.length * lineHeight > bh * 0.92 && fontSize > 11) {
+    fontSize -= 1;
+    lineHeight = fontSize * 1.25;
+    ctx.font = `800 ${fontSize}px ${FONT}`;
+    lines = [];
+    rawParagraphs.forEach(para => {
+      lines.push(...getWrappedLines(ctx, para, bw * 0.92));
+    });
+  }
+
+  const centerX = x1 + bw / 2;
+  const centerY = y1 + bh / 2;
+  let currentY = centerY - ((lines.length - 1) * lineHeight) / 2;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 5. 가독성을 위한 부드러운 글자 테두리 렌더링
+  ctx.strokeStyle = isLight ? '#ffffff' : '#000000';
+  ctx.lineWidth = Math.max(2, fontSize * 0.12);
+
+  lines.forEach(line => {
+    ctx.strokeText(line, centerX, currentY);
+    ctx.fillStyle = textColor;
+    ctx.fillText(line, centerX, currentY);
+    currentY += lineHeight;
+  });
+
+  ctx.restore();
+}
+
+function render(p) {
+  const b = p.bmp, W = b.width, H = b.height, cv = p.cv;
+  cv.width = W; cv.height = H;
+  const c = cv.getContext('2d');
+  c.drawImage(b, 0, 0);
+
+  if (!p.items) return;
+
+  const scCanvas = document.createElement('canvas');
+  scCanvas.width = W; scCanvas.height = H;
+  const sc = scCanvas.getContext('2d');
+  sc.drawImage(b, 0, 0);
+
+  p.items.forEach(it => renderText(c, sc, it, W, H));
+}
+
+async function getAvailableModels(key, sig) {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, { signal: sig });
+    if (!res.ok) return ['gemini-1.5-flash'];
+    const data = await res.json();
+    const list = (data.models || [])
+      .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+      .map(m => m.name.replace('models/', ''))
+      .filter(name => name.includes('flash'));
+    return list.length ? list : ['gemini-1.5-flash'];
+  } catch(e) {
+    return ['gemini-1.5-flash'];
+  }
+}
+
+async function fastTranslate(p, sig) {
+  const key = keyInput.value.trim();
+  if (!key) throw new Error('API 키를 입력해주세요.');
+
+  const b = p.bmp, W = b.width, H = b.height;
+  setSt(p, '번역 중…');
+
+  const scale = Math.min(1, 800 / Math.max(W, H));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(W * scale);
+  cv.height = Math.round(H * scale);
+  cv.getContext('2d').drawImage(b, 0, 0, cv.width, cv.height);
+
+  const b64 = await new Promise(res => {
+    const r = new FileReader();
+    cv.toBlob(blob => {
+      r.onload = () => res(String(r.result).split(',')[1]);
+      r.readAsDataURL(blob);
+    }, 'image/jpeg', 0.75);
+  });
+
+  const promptText = `Detect ALL speech bubbles text and translate to natural Korean (${lang}). Box format: [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
+  
+  const payload = {
+    contents: [{
+      parts: [
+        { inline_data: { mime_type: 'image/jpeg', data: b64 } },
+        { text: promptText }
+      ]
+    }],
+    generationConfig: {
+      temperature: 0.1,
+      response_mime_type: 'application/json',
+      response_schema: {
+        type: "OBJECT",
+        properties: {
+          items: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                box: { type: "ARRAY", items: { type: "INTEGER" } },
+                ko: { type: "STRING" }
+              },
+              required: ["box", "ko"]
+            }
+          }
+        },
+        required: ["items"]
+      }
+    }
+  };
+
+  const availableModels = await getAvailableModels(key, sig);
+  let res = null;
+  let lastStatus = 0;
+
+  for (const model of availableModels) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: sig
+      });
+      if (res.ok) break;
+      lastStatus = res.status;
+      if (res.status === 429) break;
+    } catch (e) {}
+  }
+
+  if (!res || !res.ok) {
+    if (lastStatus === 429) {
+      throw new Error('무료 하루 호출 제한을 소모했습니다. 다른 계정의 API 키를 입력해 주세요.');
+    }
+    throw new Error('구글 AI 서버 접속 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
+  }
+
+  const j = await res.json();
+  const cand = (j.candidates || [])[0];
+  if (!cand) throw new Error('응답 실패');
+
+  let rawText = ((cand.content && cand.content.parts) || []).map(p => p.text || '').join('').trim();
+  
+  let parsed = { items: [] };
+  if (rawText) {
+    try {
+      parsed = JSON.parse(rawText);
+    } catch(e) {
+      const firstBrace = rawText.indexOf('{');
+      const lastBrace = rawText.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        try { parsed = JSON.parse(rawText.slice(firstBrace, lastBrace + 1)); } catch(err){}
+      }
+    }
+  }
+
+  const items = [];
+  for (const it of (parsed.items || [])) {
+    const bx = it.box;
+    if (!Array.isArray(bx) || bx.length < 4 || !it.ko) continue;
+    items.push({
+      y1: (bx[0] / 1000) * H,
+      x1: (bx[1] / 1000) * W,
+      h: ((bx[2] - bx[0]) / 1000) * H,
+      w: ((bx[3] - bx[1]) / 1000) * W,
+      ko: String(it.ko)
+    });
+  }
+
+  p.items = items;
+  setSt(p, '');
+}
+
+$('go').onclick = async () => {$('err').textContent = '';
+  ctrl = new AbortController();
+  layout();
+
+  for (let i = 0; i < pages.length; i++) {
+    const p = pages[i];
+    if (p.items) continue;
+    try {
+      await fastTranslate(p, ctrl.signal);
+      render(p);
+      
+      if (i < pages.length - 1) {
+        await new Promise(r => setTimeout(r, 1200));
+      }
+    } catch (e) {
+      setSt(p, '');
+      $('err').textContent = e.message || '오류가 발생했습니다.';
+      break;
+    }
+  }
+  ctrl = null;
+  layout();
+};
+</script>
+</body>
+</html>
