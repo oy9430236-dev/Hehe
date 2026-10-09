@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <body>
 <main>
 <h1>⚡ 웹툰 초고속 번역기</h1>
-<p class="sub">네모 박스 없이 원문 위치에 자연스럽게 번역 텍스트만 배치합니다.</p>
+<p class="sub">디테일한 캐릭터 뉘앙스 번역 및 완벽한 말풍선 맞춤 레이아웃을 제공합니다.</p>
 <div class="card cfg">
   <span class="t">Gemini API 키 (자동 저장)</span>
   <input type="password" id="key" style="width:100%" placeholder="Gemini API 키 입력 (AIza…)" autocomplete="off">
@@ -110,17 +110,36 @@ function layout(){
 
 const setSt=(p,t)=>{ p.st=t; if(p.bdEl){ p.bdEl.textContent=t; p.bdEl.hidden=!t; } };
 
-function wrapTextCJK(ctx, text, maxWidth) {
+// 스마트 자동 줄바꿈 (단어 및 어절 단위 안착)
+function wrapTextSmart(ctx, text, maxWidth) {
   const lines = [];
   const paragraphs = text.split('\n');
 
   for (let para of paragraphs) {
+    const words = para.split(' ');
     let currentLine = '';
-    for (let char of para) {
-      const testLine = currentLine + char;
-      if (ctx.measureText(testLine).width > maxWidth && currentLine.length > 0) {
-        lines.push(currentLine);
-        currentLine = char;
+
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      const testLine = currentLine ? currentLine + ' ' + word : word;
+      
+      if (ctx.measureText(testLine).width > maxWidth) {
+        if (currentLine) {
+          lines.push(currentLine);
+          currentLine = word;
+        } else {
+          // 단어 하나가 너무 길면 글자 단위로 자름
+          let charLine = '';
+          for (let char of word) {
+            if (ctx.measureText(charLine + char).width > maxWidth && charLine) {
+              lines.push(charLine);
+              charLine = char;
+            } else {
+              charLine += char;
+            }
+          }
+          currentLine = charLine;
+        }
       } else {
         currentLine = testLine;
       }
@@ -136,12 +155,12 @@ function renderText(ctx, scCtx, item, W, H) {
   const bw = Math.min(W - x1, Math.ceil(item.w));
   const bh = Math.min(H - y1, Math.ceil(item.h));
 
-  if (bw < 6 || bh < 6) return;
+  if (bw < 5 || bh < 5) return;
 
-  // 1. 말풍선 안쪽의 원본 배경색 추출
+  // 1. 말풍선 외곽 색상 샘플링 (주변 배경색)
   const data = scCtx.getImageData(x1, y1, bw, bh).data;
   let r=0, g=0, b=0, c=0;
-  for(let i=0; i<data.length; i+=32){
+  for(let i=0; i<data.length; i+=16){
     r += data[i]; g += data[i+1]; b += data[i+2]; c++;
   }
   r = Math.round(r/c); g = Math.round(g/c); b = Math.round(b/c);
@@ -150,19 +169,19 @@ function renderText(ctx, scCtx, item, W, H) {
   const isLight = (r * 0.299 + g * 0.587 + b * 0.114) > 130;
   const textColor = isLight ? '#000000' : '#ffffff';
 
-  // 2. 폰트 크기 및 줄바꿈 계산
-  const maxAllowWidth = bw * 0.88;
-  let fontSize = Math.max(10, Math.min(Math.floor(bw * 0.26), 26));
+  // 2. 말풍선 가로/세로 영역 맞춤 폰트 크기 계산 (잘림/이탈 차단)
+  const maxAllowWidth = Math.max(bw * 0.86, 16);
+  let fontSize = Math.max(10, Math.min(Math.floor(bw * 0.24), 26));
   ctx.font = `800 ${fontSize}px ${FONT}`;
 
-  let lines = wrapTextCJK(ctx, item.ko, maxAllowWidth);
-  let lineHeight = fontSize * 1.35;
+  let lines = wrapTextSmart(ctx, item.ko, maxAllowWidth);
+  let lineHeight = fontSize * 1.25;
 
-  while (lines.length * lineHeight > bh * 0.95 && fontSize > 9) {
+  while (lines.length * lineHeight > bh * 0.92 && fontSize > 8) {
     fontSize -= 1;
-    lineHeight = fontSize * 1.35;
+    lineHeight = fontSize * 1.25;
     ctx.font = `800 ${fontSize}px ${FONT}`;
-    lines = wrapTextCJK(ctx, item.ko, maxAllowWidth);
+    lines = wrapTextSmart(ctx, item.ko, maxAllowWidth);
   }
 
   const centerX = x1 + bw / 2;
@@ -173,16 +192,24 @@ function renderText(ctx, scCtx, item, W, H) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // [핵심] 네모 박스/면 그리기 완전히 제거!
-  // 배경색 테두리(stroke)만 넉넉한 굵기로 그려서 원문 일본어 글자만 감쪽같이 지움
+  // 3. [핵심] 네모 상자 없이 글자 뒷배경 테두리(Stroke)만으로 원문 완벽 제거
   ctx.strokeStyle = bgColor;
-  ctx.lineWidth = Math.max(8, fontSize * 0.55);
+  ctx.lineWidth = Math.max(10, fontSize * 0.85);
   ctx.lineJoin = 'round';
 
   lines.forEach(line => {
+    // 1차: 바탕색 두꺼운 테두리로 원문 일본어 은폐
     ctx.strokeText(line, centerX, currentY);
+    
+    // 2차: 텍스트 또렷한 가독성 테두리
+    ctx.strokeStyle = isLight ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.8)';
+    ctx.lineWidth = Math.max(1.5, fontSize * 0.1);
+    ctx.strokeText(line, centerX, currentY);
+
+    // 3차: 한국어 번역 텍스트 채우기
     ctx.fillStyle = textColor;
     ctx.fillText(line, centerX, currentY);
+    
     currentY += lineHeight;
   });
 
@@ -241,7 +268,13 @@ async function fastTranslate(p, sig) {
     }, 'image/jpeg', 0.75);
   });
 
-  const promptText = `Detect speech bubbles, translate to natural Korean (${lang}). Box format: [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
+  // [요구사항 4,5 반영] 캐릭터 말투 디테일화 & 완전 번역 프롬프트
+  const promptText = `Translate ALL speech bubbles and text into NATURAL, EMOTIONAL KOREAN (${lang}).
+CRITICAL INSTRUCTIONS:
+1. Match character personality, tone, age, and nuance in Korean (말투 디테일 살릴 것).
+2. NEVER leave original text untranslated.
+3. Group text from the same speech bubble as ONE bounding box.
+4. Output tight box coordinates [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
   
   const payload = {
     contents: [{
@@ -251,7 +284,7 @@ async function fastTranslate(p, sig) {
       ]
     }],
     generationConfig: {
-      temperature: 0.1,
+      temperature: 0.2,
       response_mime_type: 'application/json',
       response_schema: {
         type: "OBJECT",
@@ -262,7 +295,7 @@ async function fastTranslate(p, sig) {
               type: "OBJECT",
               properties: {
                 box: { type: "ARRAY", items: { type: "INTEGER" } },
-                ko: { type: "STRING" }
+                ko: { type: "STRING", description: "Naturally translated Korean text" }
               },
               required: ["box", "ko"]
             }
