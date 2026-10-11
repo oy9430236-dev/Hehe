@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <body>
 <main>
 <h1>⚡ 웹툰 초고속 번역기</h1>
-<p class="sub">배경색 마스크 테두리로 원문을 완벽히 지우고 깔끔하게 번역합니다.</p>
+<p class="sub">API 호출 최적화 구조로 제한을 줄이고 깔끔하게 번역합니다.</p>
 <div class="card cfg">
   <span class="t">Gemini API 키 (자동 저장)</span>
   <input type="password" id="key" style="width:100%" placeholder="Gemini API 키 입력 (AIza…)" autocomplete="off">
@@ -50,7 +50,7 @@ button:disabled{opacity:.5}
   <div class="row">
     <input type="file" id="file" accept="image/*,.cbz,.zip" multiple class="hide">
     <button class="b s" id="pick">🖼️ 이미지 추가</button>
-    <button class="b" id="go" disabled>⚡ 번역하기</button>
+    <button class="b" id="go" disabled>⚡ 일괄 번역하기</button>
   </div>
   <div id="err"></div>
 </div>
@@ -113,15 +113,12 @@ const setSt=(p,t)=>{ p.st=t; if(p.bdEl){ p.bdEl.textContent=t; p.bdEl.hidden=!t;
 function wrapTextSmart(ctx, text, maxWidth) {
   const lines = [];
   const paragraphs = text.split('\n');
-
   for (let para of paragraphs) {
     const words = para.split(' ');
     let currentLine = '';
-
     for (let i = 0; i < words.length; i++) {
       const word = words[i];
       const testLine = currentLine ? currentLine + ' ' + word : word;
-      
       if (ctx.measureText(testLine).width > maxWidth) {
         if (currentLine) {
           lines.push(currentLine);
@@ -152,10 +149,8 @@ function renderText(ctx, scCtx, item, W, H) {
   const y1 = Math.max(0, Math.floor(item.y1));
   const bw = Math.min(W - x1, Math.ceil(item.w));
   const bh = Math.min(H - y1, Math.ceil(item.h));
-
   if (bw < 5 || bh < 5) return;
 
-  // 말풍선 배경색 샘플링
   const data = scCtx.getImageData(x1, y1, bw, bh).data;
   let r=0, g=0, b=0, c=0;
   for(let i=0; i<data.length; i+=16){
@@ -191,23 +186,18 @@ function renderText(ctx, scCtx, item, W, H) {
   ctx.lineJoin = 'round';
 
   lines.forEach(line => {
-    // 1단계: 말풍선 배경색 마스크 테두리 (원문 일본어 글자 완벽 은폐)
     ctx.strokeStyle = bgColor;
     ctx.lineWidth = Math.max(10, fontSize * 0.85);
     ctx.strokeText(line, centerX, currentY);
 
-    // 2단계: 한국어 글자 가독성 테두리
     ctx.strokeStyle = isLight ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.9)';
     ctx.lineWidth = Math.max(2, fontSize * 0.12);
     ctx.strokeText(line, centerX, currentY);
 
-    // 3단계: 한국어 텍스트 본문 채우기
     ctx.fillStyle = textColor;
     ctx.fillText(line, centerX, currentY);
-    
     currentY += lineHeight;
   });
-
   ctx.restore();
 }
 
@@ -218,7 +208,6 @@ function render(p) {
   c.drawImage(b, 0, 0);
 
   if (!p.items) return;
-
   const scCanvas = document.createElement('canvas');
   scCanvas.width = W; scCanvas.height = H;
   const sc = scCanvas.getContext('2d');
@@ -242,14 +231,11 @@ async function getAvailableModels(key, sig) {
   }
 }
 
-async function fastTranslate(p, sig) {
-  const key = keyInput.value.trim();
-  if (!key) throw new Error('API 키를 입력해주세요.');
-
+async function translatePage(p, key, sig) {
   const b = p.bmp, W = b.width, H = b.height;
   setSt(p, '번역 중…');
 
-  const scale = Math.min(1, 800 / Math.max(W, H));
+  const scale = Math.min(1, 700 / Math.max(W, H));
   const cv = document.createElement('canvas');
   cv.width = Math.round(W * scale);
   cv.height = Math.round(H * scale);
@@ -260,15 +246,10 @@ async function fastTranslate(p, sig) {
     cv.toBlob(blob => {
       r.onload = () => res(String(r.result).split(',')[1]);
       r.readAsDataURL(blob);
-    }, 'image/jpeg', 0.75);
+    }, 'image/jpeg', 0.7);
   });
 
-  const promptText = `Translate ALL speech bubbles and text into NATURAL, EMOTIONAL KOREAN (${lang}).
-CRITICAL INSTRUCTIONS:
-1. Match character personality, tone, age, and nuance in Korean (말투 디테일 살릴 것).
-2. NEVER leave original text untranslated.
-3. Group text from the same speech bubble as ONE bounding box.
-4. Output tight box coordinates [ymin, xmin, ymax, xmax] in 0-1000 scale.`;
+  const promptText = `Translate ALL speech bubbles and text into NATURAL, EMOTIONAL KOREAN (${lang}). Match character tone/nuance. Output JSON with items array containing box [ymin, xmin, ymax, xmax] (0-1000 scale) and ko string.`;
   
   const payload = {
     contents: [{
@@ -289,7 +270,7 @@ CRITICAL INSTRUCTIONS:
               type: "OBJECT",
               properties: {
                 box: { type: "ARRAY", items: { type: "INTEGER" } },
-                ko: { type: "STRING", description: "Naturally translated Korean text" }
+                ko: { type: "STRING" }
               },
               required: ["box", "ko"]
             }
@@ -320,10 +301,8 @@ CRITICAL INSTRUCTIONS:
   }
 
   if (!res || !res.ok) {
-    if (lastStatus === 429) {
-      throw new Error('무료 하루 호출 제한을 소모했습니다. 다른 계정의 API 키를 입력해 주세요.');
-    }
-    throw new Error('구글 AI 서버 접속 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
+    if (lastStatus === 429) throw new Error('429_LIMIT');
+    throw new Error('AI 서버 오류');
   }
 
   const j = await res.json();
@@ -331,7 +310,6 @@ CRITICAL INSTRUCTIONS:
   if (!cand) throw new Error('응답 실패');
 
   let rawText = ((cand.content && cand.content.parts) || []).map(p => p.text || '').join('').trim();
-  
   let parsed = { items: [] };
   if (rawText) {
     try {
@@ -362,23 +340,31 @@ CRITICAL INSTRUCTIONS:
   setSt(p, '');
 }
 
-$('go').onclick = async () => {$('err').textContent = '';
+$('go').onclick = async () => {
+  const key = keyInput.value.trim();
+  if (!key) { $('err').textContent = 'API 키를 입력해주세요.'; return; }
+  
+  $('err').textContent = '';
   ctrl = new AbortController();
   layout();
 
+  // 동시 병렬 처리 대신 순차 처리 및 딜레이를 주어 429 에러 확률을 대폭 낮춤
   for (let i = 0; i < pages.length; i++) {
     const p = pages[i];
     if (p.items) continue;
     try {
-      await fastTranslate(p, ctrl.signal);
+      await translatePage(p, key, ctrl.signal);
       render(p);
-      
       if (i < pages.length - 1) {
-        await new Promise(r => setTimeout(r, 1200));
+        await new Promise(r => setTimeout(r, 1500)); // 1.5초 안정 딜레이
       }
     } catch (e) {
       setSt(p, '');
-      $('err').textContent = e.message || '오류가 발생했습니다.';
+      if (e.message === '429_LIMIT') {
+        $('err').textContent = '일일 무료 호출 제한(429)에 도달했습니다. 다른 API 키로 변경 후 시도해주세요.';
+      } else {
+        $('err').textContent = '번역 중 오류가 발생했습니다.';
+      }
       break;
     }
   }
@@ -388,4 +374,3 @@ $('go').onclick = async () => {$('err').textContent = '';
 </script>
 </body>
 </html>
-  
